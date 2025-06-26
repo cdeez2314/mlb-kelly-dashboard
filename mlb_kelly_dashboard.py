@@ -9,24 +9,17 @@ from urllib.parse import quote
 WEATHER_API_KEY = "6BDG77H87GAYL2KNGYFMFNRCP"
 ODDS_API_KEY = "8a9905b9beedb8254ebc41aa5e600d7a"
 
-# PAGE SETUP
-st.set_page_config(page_title="MLB Kelly Betting Dashboard", layout="wide")
-st.title("⚾ MLB Betting Dashboard with Advanced Model + Kelly Criterion")
+st.set_page_config(page_title="MLB Betting Dashboard", layout="wide")
+st.title("⚾ MLB Betting Dashboard – Moneyline, Run Line, Totals")
 
-# USER INPUT
+# USER SETTINGS
 bankroll = st.number_input("Enter your bankroll ($)", value=1000)
 min_edge = st.slider("Minimum expected value (edge)", 0.00, 0.20, 0.05, step=0.01)
 
-# FACTOR ADJUSTMENTS
-def get_pitcher_adjustment(team):
-    return random.uniform(-0.05, 0.05)
-
-def get_recent_form_adjustment(team):
-    return random.choice([0.04, 0.02, 0.00, -0.02, -0.04])
-
-def get_home_away_adjustment(team, is_home):
-    return 0.02 if is_home else -0.02
-
+# Adjustment Functions
+def get_pitcher_adjustment(team): return random.uniform(-0.05, 0.05)
+def get_recent_form_adjustment(team): return random.choice([0.04, 0.02, 0.00, -0.02, -0.04])
+def get_home_away_adjustment(team, is_home): return 0.02 if is_home else -0.02
 def get_weather_adjustment(city):
     today = datetime.datetime.now().strftime('%Y-%m-%d')
     url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{city}/{today}?unitGroup=us&key={WEATHER_API_KEY}&include=days"
@@ -37,23 +30,18 @@ def get_weather_adjustment(city):
         temp = day.get("temp", 70)
         wind_speed = day.get("windspeed", 5)
         wind_dir = day.get("winddir", 0)
-        if wind_dir > 250 and wind_speed > 10:
-            return 0.03
-        elif wind_dir < 100 and wind_speed > 10:
-            return -0.03
-        elif temp < 50:
-            return -0.02
-        else:
-            return 0.0
-    except:
-        return 0.0
+        if wind_dir > 250 and wind_speed > 10: return 0.03
+        elif wind_dir < 100 and wind_speed > 10: return -0.03
+        elif temp < 50: return -0.02
+        else: return 0.0
+    except: return 0.0
 
-# MAIN MODEL
-def get_enhanced_odds(bankroll):
+# Main Data Fetch
+def fetch_all_markets(bankroll):
     url = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds"
     params = {
         "regions": "us",
-        "markets": "h2h",
+        "markets": "h2h,spreads,totals",
         "oddsFormat": "american",
         "apiKey": ODDS_API_KEY
     }
@@ -63,34 +51,39 @@ def get_enhanced_odds(bankroll):
         return pd.DataFrame()
 
     games = r.json()
-    rows = []
+    bets = []
     today = datetime.datetime.now().strftime("%Y-%m-%d")
 
     for game in games:
         home = game['home_team']
         away = game['away_team']
         city = home.split()[-1]
-        # Build Gameday URL
-        away_slug = quote(away.lower().replace(" ", "-"))
-        home_slug = quote(home.lower().replace(" ", "-"))
-        gameday_url = f"https://www.mlb.com/gameday/{away_slug}-at-{home_slug}/{today}"
+        url_slug = f"https://www.mlb.com/gameday/{quote(away.lower().replace(' ', '-'))}-at-{quote(home.lower().replace(' ', '-'))}/{today}"
 
-        for bookmaker in game['bookmakers']:
-            for market in bookmaker['markets']:
-                for outcome in market['outcomes']:
-                    team = outcome['name']
-                    opponent = home if team != home else away
-                    odds = outcome['price']
+        for book in game['bookmakers']:
+            for market in book['markets']:
+                mkt_type = market['key']  # h2h, spreads, totals
+                for out in market['outcomes']:
+                    team = out['name']
+                    odds = out['price']
                     is_home = team == home
 
-                    implied_prob = 100 / (odds + 100) if odds > 0 else abs(odds) / (abs(odds) + 100)
-                    model_prob = implied_prob
-                    model_prob += get_pitcher_adjustment(team)
-                    model_prob += get_recent_form_adjustment(team)
-                    model_prob += get_home_away_adjustment(team, is_home)
-                    model_prob += get_weather_adjustment(city)
-                    model_prob = min(max(model_prob, 0.05), 0.95)
+                    if mkt_type == "h2h":
+                        label = f"{team} ML"
+                        model_prob = 0.50 + get_pitcher_adjustment(team) + get_recent_form_adjustment(team) + get_home_away_adjustment(team, is_home) + get_weather_adjustment(city)
+                    elif mkt_type == "spreads":
+                        line = out['point']
+                        label = f"{team} {line:+.1f}"
+                        model_prob = 0.50 + get_recent_form_adjustment(team) + get_home_away_adjustment(team, is_home)
+                    elif mkt_type == "totals":
+                        line = out['point']
+                        label = f"{team} {line}"
+                        model_prob = 0.50 + get_weather_adjustment(city)
+                    else:
+                        continue
 
+                    implied_prob = 100 / (odds + 100) if odds > 0 else abs(odds) / (abs(odds) + 100)
+                    model_prob = min(max(model_prob, 0.05), 0.95)
                     decimal_odds = (odds / 100) + 1 if odds > 0 else (100 / abs(odds)) + 1
                     b = decimal_odds - 1
                     q = 1 - model_prob
@@ -98,20 +91,48 @@ def get_enhanced_odds(bankroll):
                     stake = round(kf * bankroll, 2)
                     ev = model_prob - implied_prob
                     conf = "🔥 High" if kf > 0.30 else "⚠️ Medium" if kf > 0.15 else "❌ Low"
-                    rec = f"✅ BET: {team} to win vs. {opponent} (${stake})" if stake > 0 else "❌ No Bet"
+                    rec = f"✅ BET: {label} (${stake})" if stake > 0 else "❌ No Bet"
 
-                    rows.append({
-                        "team": team,
-                        "opponent": opponent,
+                    bets.append({
+                        "market": mkt_type,
+                        "matchup": f"{away} @ {home}",
+                        "bet": label,
                         "odds": odds,
-                        "implied_prob": round(implied_prob, 4),
                         "model_prob": round(model_prob, 4),
+                        "implied_prob": round(implied_prob, 4),
                         "expected_value": round(ev, 4),
                         "kelly_fraction": round(kf, 4),
                         "kelly_stake": stake,
                         "confidence_level": conf,
                         "recommendation": rec,
-                        "game_info": f"[🔗 View Game]({gameday_url})"
+                        "game_link": f"[🔗 View]({url_slug})"
                     })
 
-    df = pd.DataFrame(rows)
+    return pd.DataFrame(bets)
+
+# Load Bets
+df = fetch_all_markets(bankroll)
+
+if not df.empty:
+    df = df[df["expected_value"] >= min_edge]
+    df = df.sort_values(by=["kelly_stake"], ascending=False).reset_index(drop=True)
+
+    # Format for display
+    df["implied_prob"] = (df["implied_prob"] * 100).round(2).astype(str) + "%"
+    df["model_prob"] = (df["model_prob"] * 100).round(2).astype(str) + "%"
+    df["expected_value"] = (df["expected_value"] * 100).round(2).astype(str) + "%"
+    df["kelly_fraction"] = (df["kelly_fraction"] * 100).round(2).astype(str) + "%"
+    df["kelly_stake"] = df["kelly_stake"].apply(lambda x: f"${x:.2f}")
+
+    # Separate views by market
+    for market_type, label in [("h2h", "💵 Moneyline Bets"), ("spreads", "📉 Run Line Bets"), ("totals", "🔢 Totals (O/U) Bets")]:
+        section = df[df["market"] == market_type]
+        if not section.empty:
+            st.subheader(label)
+            st.dataframe(section[[
+                "recommendation", "matchup", "bet", "odds",
+                "implied_prob", "model_prob", "expected_value",
+                "kelly_fraction", "kelly_stake", "confidence_level", "game_link"
+            ]], use_container_width=True)
+else:
+    st.warning("No games available or API limit reached.")
