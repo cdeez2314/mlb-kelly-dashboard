@@ -4,18 +4,14 @@ import streamlit as st
 import random
 
 def implied_prob(odds):
-    if odds > 0:
-        return 100 / (odds + 100)
-    else:
-        return abs(odds) / (abs(odds) + 100)
+    return 100 / (odds + 100) if odds > 0 else abs(odds) / (abs(odds) + 100)
 
 def fetch_odds_data():
     api_key = st.secrets["ODDS_API_KEY"]
     url = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/"
-    
     params = {
         "regions": "us",
-        "markets": "h2h",
+        "markets": "h2h,spreads,totals",
         "oddsFormat": "american",
         "dateFormat": "iso",
         "apiKey": api_key
@@ -31,25 +27,33 @@ def fetch_odds_data():
     rows = []
 
     for game in games:
-        if not game.get("bookmakers"):
+        bookmakers = game.get("bookmakers", [])
+        if not bookmakers:
             continue
 
-        bookmaker = game["bookmakers"][0]
-        if not bookmaker.get("markets"):
+        markets = bookmakers[0].get("markets", [])
+        if not markets or "outcomes" not in markets[0]:
             continue
 
-        market = next((m for m in bookmaker["markets"] if m["key"] == "h2h"), None)
-        if not market:
-            continue
-
-        outcomes = market["outcomes"]
-        if len(outcomes) != 2:
+        outcomes = markets[0]["outcomes"]
+        if len(outcomes) < 2:
             continue
 
         team1 = outcomes[0]
         team2 = outcomes[1]
 
-        row1 = {
-            "team": team1["name"],
-            "opponent": team2["name"],
-            "odds": team1["price"],
+        for team, opponent in [(team1, team2), (team2, team1)]:
+            odds = team.get("price")
+            if odds is None:
+                continue
+
+            row = {
+                "team": team["name"],
+                "opponent": opponent["name"],
+                "odds": odds,
+                "implied_prob": implied_prob(odds),
+                "model_prob": round(random.uniform(0.4, 0.6), 3)  # mock value
+            }
+            rows.append(row)
+
+    return pd.DataFrame(rows)
