@@ -19,7 +19,7 @@ def implied_prob(odds):
     else:
         return abs(odds) / (abs(odds) + 100)
 
-def kelly_criterion(prob, odds, bankroll):
+def kelly_criterion(prob, odds):
     decimal_odds = (odds / 100 + 1) if odds > 0 else (100 / abs(odds)) + 1
     b = decimal_odds - 1
     q = 1 - prob
@@ -29,7 +29,16 @@ def kelly_criterion(prob, odds, bankroll):
 # --- Weather API ---
 WEATHER_API_KEY = "6BDG77H87GAYL2KNGYFMFNRCP"
 
-# --- Fetch Weather Data ---
+# --- MLB Pitcher Data (Mocked) ---
+def fetch_pitchers(home_team):
+    mock_pitchers = {
+        "New York Yankees": "Gerrit Cole",
+        "Los Angeles Dodgers": "Clayton Kershaw",
+        "Chicago Cubs": "Marcus Stroman",
+        "Atlanta Braves": "Max Fried"
+    }
+    return mock_pitchers.get(home_team, "Unknown")
+
 def fetch_weather(city, date):
     base_url = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/"
     url = f"{base_url}{city}/{date}?unitGroup=us&key={WEATHER_API_KEY}&include=days"
@@ -40,11 +49,11 @@ def fetch_weather(city, date):
         weather = data["days"][0]
         return {
             "temp": weather["temp"],
-            "wind": weather["windspeed"],
+            "windSpeed": weather["windspeed"],
             "precip": weather["precip"]
         }
     except:
-        return {"temp": None, "wind": None, "precip": None}
+        return {"temp": None, "windSpeed": None, "precip": None}
 
 # --- Fetch Odds Data ---
 def fetch_odds_data():
@@ -71,66 +80,66 @@ def fetch_odds_data():
         commence_time = game["commence_time"]
         date_str = commence_time.split("T")[0]
         weather = fetch_weather(home_team, date_str)
+        pitcher = fetch_pitchers(home_team)
 
-        moneyline, runline, total = None, None, None
-        for bookmaker in game.get("bookmakers", []):
-            for market in bookmaker.get("markets", []):
-                if market["key"] == "h2h" and market.get("outcomes"):
-                    if market["outcomes"][0]["name"] == home_team:
-                        moneyline = market["outcomes"][0]["price"]
-                elif market["key"] == "spreads" and market.get("outcomes"):
-                    runline = market["outcomes"][0].get("point")
-                elif market["key"] == "totals" and market.get("outcomes"):
-                    total = market["outcomes"][0].get("point")
+        row = {
+            "team": home_team,
+            "opponent": opponent,
+            "moneyline": None,
+            "spread": None,
+            "spread_odds": None,
+            "total": None,
+            "total_odds": None,
+            "confidence_level": "",
+            "recommendation": "",
+        }
 
         for bookmaker in game.get("bookmakers", []):
             for market in bookmaker.get("markets", []):
                 for outcome in market.get("outcomes", []):
-                    row = {
-                        "recommendation": f"BET: {outcome['name']} to win vs. {opponent}",
-                        "team": outcome["name"],
-                        "opponent": opponent,
-                        "odds": outcome["price"],
-                        "market": market["key"],
-                        "Moneyline": moneyline,
-                        "Run Line": runline,
-                        "Total": total,
-                        "temp": weather["temp"],
-                        "wind": weather["wind"],
-                        "precip": weather["precip"]
-                    }
-                    rows.append(row)
+                    if outcome["name"] != home_team:
+                        continue
+                    if market["key"] == "h2h":
+                        row["moneyline"] = outcome["price"]
+                    elif market["key"] == "spreads":
+                        row["spread"] = outcome.get("point")
+                        row["spread_odds"] = outcome["price"]
+                    elif market["key"] == "totals":
+                        row["total"] = outcome.get("point")
+                        row["total_odds"] = outcome["price"]
+        row.update({"pitcher": pitcher, **weather})
+        rows.append(row)
     return pd.DataFrame(rows)
 
 # --- Simulated Model Probabilities ---
 def simulate_model_probs(df):
     np.random.seed(42)
-    df["model_prob"] = np.random.uniform(0.5, 0.8, size=len(df))
+    df["model_prob"] = np.random.uniform(0.6, 0.8, len(df))
+    df["implied_prob"] = df["moneyline"].apply(lambda x: implied_prob(x) if pd.notnull(x) else None)
+    df["expected_value"] = df["model_prob"] - df["implied_prob"]
+    df["kelly_fraction"] = df.apply(lambda x: kelly_criterion(x["model_prob"], x["moneyline"]) if pd.notnull(x["moneyline"]) else 0, axis=1)
+    df["kelly_stake"] = (df["kelly_fraction"] * bankroll).round(2)
+    df["confidence_level"] = pd.cut(df["expected_value"], bins=[0, 0.05, 0.10, 1], labels=["Low", "Medium", "High"])
     return df
 
-# --- Main Execution ---
+# --- Dashboard Execution ---
 df = fetch_odds_data()
 if df.empty:
     st.stop()
 
-df = df.dropna(subset=["odds"])
 df = simulate_model_probs(df)
-
-# Calculations
-df["implied_prob"] = df["odds"].apply(implied_prob)
-df["expected_value"] = df["model_prob"] - df["implied_prob"]
-df["kelly_fraction"] = df.apply(lambda x: kelly_criterion(x["model_prob"], x["odds"], bankroll), axis=1)
-df["kelly_stake"] = (df["kelly_fraction"] * bankroll).round(2)
-df["confidence_level"] = pd.cut(df["expected_value"], bins=[0, 0.05, 0.10, 1], labels=["Low", "Medium", "High"])
-
-# Filter
 df = df[df["expected_value"] >= min_ev]
-df = df[df["market"] == "h2h"]  # only show moneyline bets to avoid duplicates
 
-# Final display columns
-columns_to_display = ["recommendation", "team", "opponent", "odds", "Moneyline", "Run Line", "Total", "confidence_level"]
-df = df.sort_values("expected_value", ascending=False)
+# --- Recommendations ---
+def format_recommendation(row):
+    return f"BET: {row['team']} to win vs. {row['opponent']} (${row['kelly_stake']})"
 
-# Display
+df["recommendation"] = df.apply(format_recommendation, axis=1)
+
+# --- Final Columns ---
+display_cols = [
+    "recommendation", "team", "opponent", "moneyline", "spread", "spread_odds", "total", "total_odds", "confidence_level"
+]
+
 st.subheader("Top Kelly Bets")
-st.dataframe(df[columns_to_display], use_container_width=True)
+st.dataframe(df[display_cols].sort_values("expected_value", ascending=False), use_container_width=True)
