@@ -1,3 +1,4 @@
+from fetch_odds_data import fetch_odds_data
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -7,14 +8,7 @@ st.set_page_config(page_title="MLB Kelly Betting Dashboard", layout="wide")
 st.title("⚾ MLB Betting Dashboard with Kelly Criterion")
 
 # --- Simulated input data (replace with live data fetch) ---
-data = {
-    "home": ["Dodgers", "Dodgers", "Blue Jays", "Blue Jays", "Mariners"],
-    "away": ["Rockies", "Rockies", "Guardians", "Guardians", "Twins"],
-    "bet_type": ["Moneyline", "Run Line", "Moneyline", "Over", "Moneyline"],
-    "line": [None, -1.5, None, 7.5, None],
-    "odds": [-276, -110, -102, -115, -120],
-    "model_prob": [0.78, 0.62, 0.55, 0.63, 0.59]
-}
+df = fetch_odds_data()
 df = pd.DataFrame(data)
 
 # --- Functions ---
