@@ -6,7 +6,7 @@ from datetime import datetime
 
 # Set up page
 st.set_page_config(page_title="MLB Kelly Betting Dashboard", layout="wide")
-st.title("🏁 MLB Betting Dashboard with Kelly Criterion")
+st.title("\U0001F3C1 MLB Betting Dashboard with Kelly Criterion")
 
 # --- User Inputs ---
 bankroll = st.number_input("Enter your bankroll ($)", min_value=100, value=1000)
@@ -138,7 +138,7 @@ df["recommendation"] = df.apply(format_recommendation, axis=1)
 
 # --- Final Columns ---
 display_cols = [
-    "recommendation", "team", "opponent", "moneyline", "spread", "spread_odds", "total", "total_odds", "confidence_level"
+    "recommendation", "team", "opponent", "moneyline", "spread", "total", "confidence_level"
 ]
 
 st.subheader("Top Kelly Bets")
