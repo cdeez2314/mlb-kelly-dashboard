@@ -4,7 +4,7 @@ import streamlit as st
 import os
 
 def fetch_odds_data():
-    api_key = st.secrets["8a9905b9beedb8254ebc41aa5e600d7a"]
+    api_key = st.secrets["ODDS_API_KEY"]
     url = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/"
     params = {
         "regions": "us",
