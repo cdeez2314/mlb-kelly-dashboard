@@ -4,9 +4,9 @@ import numpy as np
 import requests
 from datetime import datetime
 
-# Set up page
+# Set page configuration
 st.set_page_config(page_title="MLB Kelly Betting Dashboard", layout="wide")
-st.title("\U0001F3C1 MLB Betting Dashboard with Kelly Criterion")
+st.title("🏁 MLB Betting Dashboard with Kelly Criterion")
 
 # --- User Inputs ---
 bankroll = st.number_input("Enter your bankroll ($)", min_value=100, value=1000)
@@ -29,16 +29,6 @@ def kelly_criterion(prob, odds):
 # --- Weather API ---
 WEATHER_API_KEY = "6BDG77H87GAYL2KNGYFMFNRCP"
 
-# --- MLB Pitcher Data (Mocked) ---
-def fetch_pitchers(home_team):
-    mock_pitchers = {
-        "New York Yankees": "Gerrit Cole",
-        "Los Angeles Dodgers": "Clayton Kershaw",
-        "Chicago Cubs": "Marcus Stroman",
-        "Atlanta Braves": "Max Fried"
-    }
-    return mock_pitchers.get(home_team, "Unknown")
-
 def fetch_weather(city, date):
     base_url = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/"
     url = f"{base_url}{city}/{date}?unitGroup=us&key={WEATHER_API_KEY}&include=days"
@@ -48,12 +38,12 @@ def fetch_weather(city, date):
         data = res.json()
         weather = data["days"][0]
         return {
-            "temp": weather["temp"],
-            "windSpeed": weather["windspeed"],
-            "precip": weather["precip"]
+            "temp": weather.get("temp"),
+            "wind": weather.get("windspeed"),
+            "precip": weather.get("precip")
         }
     except:
-        return {"temp": None, "windSpeed": None, "precip": None}
+        return {"temp": None, "wind": None, "precip": None}
 
 # --- Fetch Odds Data ---
 def fetch_odds_data():
@@ -71,49 +61,40 @@ def fetch_odds_data():
         st.error(f"Error fetching odds: {response.status_code} - {response.text}")
         return pd.DataFrame()
 
-    games = response.json()
     rows = []
-    for game in games:
-        teams = game["teams"]
-        home_team = game.get("home_team", "")
-        opponent = [t for t in teams if t != home_team][0]
-        commence_time = game["commence_time"]
-        date_str = commence_time.split("T")[0]
-        weather = fetch_weather(home_team, date_str)
-        pitcher = fetch_pitchers(home_team)
+    for game in response.json():
+        home = game.get("home_team")
+        away = [t for t in game.get("teams") if t != home][0]
+        date_str = game.get("commence_time", "").split("T")[0]
+        weather = fetch_weather(home, date_str)
 
         row = {
-            "team": home_team,
-            "opponent": opponent,
+            "team": home,
+            "opponent": away,
             "moneyline": None,
             "spread": None,
-            "spread_odds": None,
             "total": None,
-            "total_odds": None,
-            "confidence_level": "",
-            "recommendation": "",
+            **weather,
         }
 
         for bookmaker in game.get("bookmakers", []):
             for market in bookmaker.get("markets", []):
                 for outcome in market.get("outcomes", []):
-                    if outcome["name"] != home_team:
+                    if outcome.get("name") != home:
                         continue
                     if market["key"] == "h2h":
-                        row["moneyline"] = outcome["price"]
+                        row["moneyline"] = outcome.get("price")
                     elif market["key"] == "spreads":
                         row["spread"] = outcome.get("point")
-                        row["spread_odds"] = outcome["price"]
                     elif market["key"] == "totals":
                         row["total"] = outcome.get("point")
-                        row["total_odds"] = outcome["price"]
-        row.update({"pitcher": pitcher, **weather})
+
         rows.append(row)
     return pd.DataFrame(rows)
 
 # --- Simulated Model Probabilities ---
 def simulate_model_probs(df):
-    np.random.seed(42)
+    np.random.seed(0)
     df["model_prob"] = np.random.uniform(0.6, 0.8, len(df))
     df["implied_prob"] = df["moneyline"].apply(lambda x: implied_prob(x) if pd.notnull(x) else None)
     df["expected_value"] = df["model_prob"] - df["implied_prob"]
@@ -122,7 +103,7 @@ def simulate_model_probs(df):
     df["confidence_level"] = pd.cut(df["expected_value"], bins=[0, 0.05, 0.10, 1], labels=["Low", "Medium", "High"])
     return df
 
-# --- Dashboard Execution ---
+# --- Run Dashboard ---
 df = fetch_odds_data()
 if df.empty:
     st.stop()
@@ -130,16 +111,15 @@ if df.empty:
 df = simulate_model_probs(df)
 df = df[df["expected_value"] >= min_ev]
 
-# --- Recommendations ---
-def format_recommendation(row):
+def make_recommendation(row):
     return f"BET: {row['team']} to win vs. {row['opponent']} (${row['kelly_stake']})"
 
-df["recommendation"] = df.apply(format_recommendation, axis=1)
+df["recommendation"] = df.apply(make_recommendation, axis=1)
 
-# --- Final Columns ---
-display_cols = [
+# --- Display ---
+final_cols = [
     "recommendation", "team", "opponent", "moneyline", "spread", "total", "confidence_level"
 ]
 
 st.subheader("Top Kelly Bets")
-st.dataframe(df[display_cols].sort_values("expected_value", ascending=False), use_container_width=True)
+st.dataframe(df[final_cols].sort_values("expected_value", ascending=False), use_container_width=True)
