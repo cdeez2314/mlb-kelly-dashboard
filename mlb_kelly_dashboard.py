@@ -2,10 +2,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+from datetime import datetime
 
 # Set page configuration
 st.set_page_config(page_title="MLB Kelly Betting Dashboard", layout="wide")
-st.title("🏁 MLB Betting Dashboard with Kelly Criterion (ESPN Odds)")
+st.title("🏁 MLB Betting Dashboard with Kelly Criterion")
 
 # --- User Inputs ---
 bankroll = st.number_input("Enter your bankroll ($)", min_value=100, value=1000)
@@ -37,11 +38,20 @@ def fetch_espn_odds():
             competition = event.get("competitions", [{}])[0]
             teams = competition.get("competitors", [])
             odds = competition.get("odds", [{}])[0]
+            date_str = event.get("date", "")
+            game_time = datetime.fromisoformat(date_str[:-1]).strftime('%I:%M %p')
+            game_date = datetime.fromisoformat(date_str[:-1]).strftime('%Y-%m-%d')
             home = next((t["team"]["displayName"] for t in teams if t["homeAway"] == "home"), "")
             away = next((t["team"]["displayName"] for t in teams if t["homeAway"] == "away"), "")
+            pitcher_home = next((t.get("starter", {}).get("fullName", "N/A") for t in teams if t["homeAway"] == "home"), "")
+            pitcher_away = next((t.get("starter", {}).get("fullName", "N/A") for t in teams if t["homeAway"] == "away"), "")
             games.append({
+                "game": f"{away} at {home}",
                 "team": home,
                 "opponent": away,
+                "date": game_date,
+                "time": game_time,
+                "pitching_matchup": f"{pitcher_away} vs. {pitcher_home}",
                 "moneyline": None,
                 "spread": None,
                 "total": None,
@@ -57,9 +67,9 @@ def fetch_espn_odds():
 def simulate_model_probs(df):
     np.random.seed(0)
     df["model_prob"] = np.random.uniform(0.6, 0.8, len(df))
-    df["implied_prob"] = 0.5  # Placeholder (since we don't have odds values)
+    df["implied_prob"] = 0.5
     df["expected_value"] = df["model_prob"] - df["implied_prob"]
-    df["kelly_fraction"] = df.apply(lambda x: kelly_criterion(x["model_prob"], 100), axis=1)  # Assume +100 odds
+    df["kelly_fraction"] = df.apply(lambda x: kelly_criterion(x["model_prob"], 100), axis=1)
     df["kelly_stake"] = (df["kelly_fraction"] * bankroll).round(2)
     df["confidence_level"] = pd.cut(df["expected_value"], bins=[0, 0.05, 0.10, 1], labels=["Low", "Medium", "High"])
     return df
@@ -79,7 +89,8 @@ df["recommendation"] = df.apply(make_recommendation, axis=1)
 
 # --- Display ---
 final_cols = [
-    "recommendation", "team", "opponent", "details", "provider", "kelly_stake", "confidence_level"
+    "game", "team", "opponent", "date", "time", "pitching_matchup",
+    "details", "provider", "kelly_stake", "confidence_level", "recommendation"
 ]
 
 st.subheader("Top Kelly Bets (ESPN Odds)")
