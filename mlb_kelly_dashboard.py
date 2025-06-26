@@ -1,64 +1,86 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from fetch_odds_data import fetch_odds_data
-from scipy.stats import norm
+import requests
 
-# Configure
-st.set_page_config(page_title="MLB Kelly Bets", layout="wide")
-st.title("⚾️ MLB Betting Dashboard - Moneyline, Run Line, Totals")
+# Set page configuration
+st.set_page_config(page_title="MLB Kelly Betting Dashboard", layout="wide")
+st.title("🏁 MLB Betting Dashboard with Kelly Criterion (ESPN Odds)")
 
-# User Inputs
-bankroll = st.number_input("Enter your bankroll ($)", min_value=1.0, value=1000.0, step=1.0)
-min_edge = st.slider("Minimum expected value (edge)", 0.0, 0.2, 0.05, 0.01)
+# --- User Inputs ---
+bankroll = st.number_input("Enter your bankroll ($)", min_value=100, value=1000)
+min_ev = st.slider("Minimum expected value (edge)", min_value=0.00, max_value=0.20, step=0.01, value=0.01)
 
-# Fetch and transform
-api_key = st.secrets["ODDS_API_KEY"]
-data = fetch_odds_data(api_key)
+# --- Kelly Criterion ---
+def implied_prob(odds):
+    if odds > 0:
+        return 100 / (odds + 100)
+    else:
+        return abs(odds) / (abs(odds) + 100)
 
-rows = []
-for game in data:
-    home = game["home_team"]
-    away = game["away_team"]
-    for book in game["bookmakers"]:
-        for m in book["markets"]:
-            if m["key"] == "h2h":
-                for o in m["outcomes"]:
-                    team, odds = o["name"], o["price"]
-                    rows.append({"team": team, "opponent": away if team==home else home, 
-                                 "market":"Moneyline", "odds": odds})
-            if m["key"] == "spreads":
-                for o in m["outcomes"]:
-                    rows.append({"team": o["name"], "opponent": away if o["name"]==home else home, 
-                                 "market":"Run Line", "odds": o["price"], "line": o["point"]})
-            if m["key"] == "totals":
-                for o in m["outcomes"]:
-                    rows.append({"team":"Total", "opponent": "", 
-                                 "market": f"Totals ({o['point']})", "odds": o["price"], "side":o["name"]})
+def kelly_criterion(prob, odds):
+    decimal_odds = (odds / 100 + 1) if odds > 0 else (100 / abs(odds)) + 1
+    b = decimal_odds - 1
+    q = 1 - prob
+    f = (prob * b - q) / b
+    return max(f, 0)
 
-df = pd.DataFrame(rows)
-df.drop_duplicates(inplace=True)
+# --- Fetch Odds Data from ESPN ---
+def fetch_espn_odds():
+    url = "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        games = []
+        for event in data.get("events", []):
+            competition = event.get("competitions", [{}])[0]
+            teams = competition.get("competitors", [])
+            odds = competition.get("odds", [{}])[0]
+            home = next((t["team"]["displayName"] for t in teams if t["homeAway"] == "home"), "")
+            away = next((t["team"]["displayName"] for t in teams if t["homeAway"] == "away"), "")
+            games.append({
+                "team": home,
+                "opponent": away,
+                "moneyline": None,
+                "spread": None,
+                "total": None,
+                "details": odds.get("details", "N/A"),
+                "provider": odds.get("provider", {}).get("name", "N/A")
+            })
+        return pd.DataFrame(games)
+    except Exception as e:
+        st.error(f"Error fetching ESPN odds: {e}")
+        return pd.DataFrame()
 
-# Model: simulate model_prob using implied + margin
-df["implied_prob"] = df["odds"].apply(lambda x: 100/(x+100) if x>0 else abs(x)/(abs(x)+100))
-df["model_prob"] = df["implied_prob"] + 0.05  # example model edge
-df["edge"] = df["model_prob"] - df["implied_prob"]
-df = df[df["edge"] >= min_edge]
+# --- Simulated Model Probabilities ---
+def simulate_model_probs(df):
+    np.random.seed(0)
+    df["model_prob"] = np.random.uniform(0.6, 0.8, len(df))
+    df["implied_prob"] = 0.5  # Placeholder (since we don't have odds values)
+    df["expected_value"] = df["model_prob"] - df["implied_prob"]
+    df["kelly_fraction"] = df.apply(lambda x: kelly_criterion(x["model_prob"], 100), axis=1)  # Assume +100 odds
+    df["kelly_stake"] = (df["kelly_fraction"] * bankroll).round(2)
+    df["confidence_level"] = pd.cut(df["expected_value"], bins=[0, 0.05, 0.10, 1], labels=["Low", "Medium", "High"])
+    return df
 
-def calc_kelly(p, odds):
-    b = (odds/100 if odds>0 else 100/abs(odds)) 
-    q = 1-p
-    return (p*(b+1)-1)/b if p*(b+1)>1 else 0
+# --- Run Dashboard ---
+df = fetch_espn_odds()
+if df.empty:
+    st.stop()
 
-df["kelly_fraction"] = df.apply(lambda r: calc_kelly(r["model_prob"], r["odds"]), axis=1)
-df["kelly_stake"] = (df["kelly_fraction"] * bankroll).round(2)
+df = simulate_model_probs(df)
+df = df[df["expected_value"] >= min_ev]
 
-# Confidence
-df["confidence_level"] = pd.cut(df["edge"], bins=[0,0.08,0.15,1], labels=["Low","Medium","High"])
+def make_recommendation(row):
+    return f"BET: {row['team']} to win vs. {row['opponent']} (${row['kelly_stake']})"
 
-df["recommendation"] = df.apply(
-    lambda r: f"✅ BET: {r['team']} {r['market']} vs {r['opponent']} (${r['kelly_stake']:.2f})", axis=1
-)
+df["recommendation"] = df.apply(make_recommendation, axis=1)
 
-cols = ["recommendation","team","opponent","market","odds","kelly_stake","confidence_level"]
-st.table(df[cols].sort_values("kelly_stake", ascending=False))
+# --- Display ---
+final_cols = [
+    "recommendation", "team", "opponent", "details", "provider", "kelly_stake", "confidence_level"
+]
+
+st.subheader("Top Kelly Bets (ESPN Odds)")
+st.dataframe(df[final_cols].sort_values("expected_value", ascending=False), use_container_width=True)
