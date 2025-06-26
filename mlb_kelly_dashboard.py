@@ -1,7 +1,6 @@
 from fetch_odds_data import fetch_odds_data
 import streamlit as st
 import pandas as pd
-import numpy as np
 
 st.set_page_config(page_title="MLB Kelly Betting Dashboard", layout="wide")
 st.title("⚾ MLB Betting Dashboard with Kelly Criterion")
@@ -27,7 +26,6 @@ if not df.empty:
         lambda row: kelly_criterion(row["model_prob"], row["odds"], bankroll), axis=1
     ))
 
-    # Format readable recommendation
     df["recommendation"] = df.apply(
         lambda row: f"✅ BET: {row['team']} to win vs. {row['opponent']} (${row['kelly_stake']:.2f})"
         if row["kelly_stake"] > 0 else "❌ No Bet", axis=1
@@ -45,4 +43,9 @@ if not df.empty:
         "implied_prob": "{:.2%}",
         "model_prob": "{:.2%}",
         "expected_value": "{:.2%}",
-        "kelly
+        "kelly_fraction": "{:.2%}",
+        "kelly_stake": "${:,.2f}"
+    }))
+
+else:
+    st.warning("No data available. Please check your API key or data source.")
