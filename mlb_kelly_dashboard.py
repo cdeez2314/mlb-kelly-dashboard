@@ -4,45 +4,50 @@ import pandas as pd
 import numpy as np
 from scipy.stats import norm
 
+# Streamlit page setup
 st.set_page_config(page_title="MLB Kelly Betting Dashboard", layout="wide")
 st.title("⚾ MLB Betting Dashboard with Kelly Criterion")
 
-# --- Simulated input data (replace with live data fetch) ---
+# Fetch the odds data
 df = fetch_odds_data()
 
 # --- Functions ---
-def implied_prob(odds):
-    return 100 / (odds + 100) if odds > 0 else abs(odds) / (abs(odds) + 100)
 
 def kelly_criterion(prob, odds, bankroll):
-    decimal_odds = (odds / 100) + 1 if odds > 0 else (100 / abs(odds)) + 1
+    if odds < 0:
+        decimal_odds = (100 / abs(odds)) + 1
+    else:
+        decimal_odds = (odds / 100) + 1
     b = decimal_odds - 1
     q = 1 - prob
     f = (prob * b - q) / b
-    return max(0, f) * bankroll
+    stake = max(0, f * bankroll)
+    return round(stake, 2), round(f, 4)
 
-# --- Calculate EV and Kelly stake ---
-df["implied_prob"] = df["odds"].apply(implied_prob)
-df["expected_value"] = df["model_prob"] - df["implied_prob"]
-df["ev_flag"] = df["expected_value"] > 0.05
-df["recommendation"] = np.where(df["ev_flag"], "✅ Bet", "🚫 No Bet")
+# --- Run Calculation and Display ---
 
-# --- User input for bankroll ---
-bankroll = st.sidebar.number_input("Enter Your Bankroll ($)", value=10000)
-df["kelly_stake"] = df.apply(
-    lambda row: kelly_criterion(row["model_prob"], row["odds"], bankroll),
-    axis=1
-)
+if not df.empty:
+    bankroll = st.number_input("Enter your bankroll ($)", min_value=0, value=1000, step=100)
 
-# --- Display ---
-st.subheader("📊 Best MLB Bets Today with Kelly Sizing")
-st.dataframe(df[[
-    "home", "away", "bet_type", "line", "odds", 
-    "model_prob", "implied_prob", "expected_value", 
-    "recommendation", "kelly_stake"
-]].style.format({
-    "model_prob": "{:.1%}",
-    "implied_prob": "{:.1%}",
-    "expected_value": "{:.1%}",
-    "kelly_stake": "${:,.2f}"
-}).applymap(lambda v: 'background-color: #d4edda' if v == "✅ Bet" else '', subset=["recommendation"]))
+    # Calculate Kelly stakes and expected value
+    df["expected_value"] = df["model_prob"] - df["implied_prob"]
+    df["kelly_stake"], df["kelly_fraction"] = zip(*df.apply(
+        lambda row: kelly_criterion(row["model_prob"], row["odds"], bankroll), axis=1
+    ))
+
+    # Filter based on edge threshold
+    threshold = st.slider("Minimum expected value (edge)", 0.0, 0.2, 0.05, 0.01)
+    filtered_df = df[df["expected_value"] > threshold].sort_values(by="expected_value", ascending=False)
+
+    st.subheader("Top Kelly Bets")
+    st.dataframe(filtered_df[[
+        "team", "opponent", "odds", "implied_prob", "model_prob", "expected_value", "kelly_fraction", "kelly_stake"
+    ]].style.format({
+        "implied_prob": "{:.2%}",
+        "model_prob": "{:.2%}",
+        "expected_value": "{:.2%}",
+        "kelly_fraction": "{:.2%}",
+        "kelly_stake": "${:,.2f}"
+    }))
+else:
+    st.warning("No data available. Please check your API key or data source.")
