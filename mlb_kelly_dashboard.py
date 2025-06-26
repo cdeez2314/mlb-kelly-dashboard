@@ -6,7 +6,7 @@ from datetime import datetime
 
 # Set up page
 st.set_page_config(page_title="MLB Kelly Betting Dashboard", layout="wide")
-st.title("\ud83c\udfc1 MLB Betting Dashboard with Kelly Criterion")
+st.title("🏁 MLB Betting Dashboard with Kelly Criterion")
 
 # --- User Inputs ---
 bankroll = st.number_input("Enter your bankroll ($)", min_value=100, value=1000)
@@ -29,7 +29,7 @@ def kelly_criterion(prob, odds, bankroll):
 # --- Weather API ---
 WEATHER_API_KEY = "6BDG77H87GAYL2KNGYFMFNRCP"
 
-# --- Fetch Weather ---
+# --- Fetch Weather Data ---
 def fetch_weather(city, date):
     base_url = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/"
     url = f"{base_url}{city}/{date}?unitGroup=us&key={WEATHER_API_KEY}&include=days"
@@ -40,36 +40,11 @@ def fetch_weather(city, date):
         weather = data["days"][0]
         return {
             "temp": weather["temp"],
-            "windSpeed": weather["windspeed"],
+            "wind": weather["windspeed"],
             "precip": weather["precip"]
         }
     except:
-        return {"temp": None, "windSpeed": None, "precip": None}
-
-# --- Fetch Starting Pitchers ---
-def fetch_pitchers_for_game(game_date):
-    try:
-        url = f"https://statsapi.mlb.com/api/v1/schedule/games/?sportId=1&date={game_date}"
-        res = requests.get(url)
-        res.raise_for_status()
-        data = res.json()
-
-        pitcher_map = {}
-        for date in data.get("dates", []):
-            for game in date.get("games", []):
-                teams = game.get("teams", {})
-                home = teams.get("home", {}).get("team", {}).get("name", "")
-                away = teams.get("away", {}).get("team", {}).get("name", "")
-
-                home_pitcher = teams.get("home", {}).get("probablePitcher", {}).get("fullName", "")
-                away_pitcher = teams.get("away", {}).get("probablePitcher", {}).get("fullName", "")
-
-                pitcher_map[home] = home_pitcher
-                pitcher_map[away] = away_pitcher
-
-        return pitcher_map
-    except:
-        return {}
+        return {"temp": None, "wind": None, "precip": None}
 
 # --- Fetch Odds Data ---
 def fetch_odds_data():
@@ -89,12 +64,6 @@ def fetch_odds_data():
 
     games = response.json()
     rows = []
-    if not games:
-        return pd.DataFrame()
-
-    sample_date = games[0].get("commence_time", "").split("T")[0]
-    pitcher_lookup = fetch_pitchers_for_game(sample_date)
-
     for game in games:
         teams = game["teams"]
         home_team = game.get("home_team", "")
@@ -103,38 +72,43 @@ def fetch_odds_data():
         date_str = commence_time.split("T")[0]
         weather = fetch_weather(home_team, date_str)
 
+        moneyline, runline, total = None, None, None
+        for bookmaker in game.get("bookmakers", []):
+            for market in bookmaker.get("markets", []):
+                if market["key"] == "h2h" and market.get("outcomes"):
+                    if market["outcomes"][0]["name"] == home_team:
+                        moneyline = market["outcomes"][0]["price"]
+                elif market["key"] == "spreads" and market.get("outcomes"):
+                    runline = market["outcomes"][0].get("point")
+                elif market["key"] == "totals" and market.get("outcomes"):
+                    total = market["outcomes"][0].get("point")
+
         for bookmaker in game.get("bookmakers", []):
             for market in bookmaker.get("markets", []):
                 for outcome in market.get("outcomes", []):
-                    team_name = outcome["name"]
                     row = {
-                        "commence_time": commence_time,
-                        "market": market["key"],
-                        "team": team_name,
-                        "opponent": [t for t in teams if t != team_name][0],
+                        "recommendation": f"BET: {outcome['name']} to win vs. {opponent}",
+                        "team": outcome["name"],
+                        "opponent": opponent,
                         "odds": outcome["price"],
+                        "market": market["key"],
+                        "Moneyline": moneyline,
+                        "Run Line": runline,
+                        "Total": total,
                         "temp": weather["temp"],
-                        "wind": weather["windSpeed"],
-                        "precip": weather["precip"],
-                        "pitcher": pitcher_lookup.get(team_name, "Unknown")
+                        "wind": weather["wind"],
+                        "precip": weather["precip"]
                     }
-                    if market["key"] == "spreads":
-                        row["spread"] = outcome.get("point")
-                    elif market["key"] == "totals":
-                        row["total"] = outcome.get("point")
                     rows.append(row)
     return pd.DataFrame(rows)
 
 # --- Simulated Model Probabilities ---
 def simulate_model_probs(df):
     np.random.seed(42)
-    model_probs = []
-    for _ in range(len(df)):
-        model_probs.append(np.random.uniform(0.5, 0.8))
-    df["model_prob"] = model_probs
+    df["model_prob"] = np.random.uniform(0.5, 0.8, size=len(df))
     return df
 
-# --- Run Dashboard Logic ---
+# --- Main Execution ---
 df = fetch_odds_data()
 if df.empty:
     st.stop()
@@ -151,25 +125,12 @@ df["confidence_level"] = pd.cut(df["expected_value"], bins=[0, 0.05, 0.10, 1], l
 
 # Filter
 df = df[df["expected_value"] >= min_ev]
+df = df[df["market"] == "h2h"]  # only show moneyline bets to avoid duplicates
 
-# Recommendations
-recommendations = []
-for i, row in df.iterrows():
-    bet_type = row["market"]
-    if bet_type == "h2h":
-        rec = f"BET: {row['team']} to win vs. {row['opponent']}"
-    elif bet_type == "spreads":
-        rec = f"BET: {row['team']} {row['spread']} vs. {row['opponent']}"
-    elif bet_type == "totals":
-        rec = f"BET: {row['team']} {row['total']} vs. {row['opponent']}"
-    else:
-        rec = "BET: Unknown"
-    recommendations.append(rec)
-df["recommendation"] = recommendations
-
-# Display
-cols = ["recommendation", "team", "opponent", "odds", "market", "confidence_level", "pitcher", "temp", "wind", "precip"]
+# Final display columns
+columns_to_display = ["recommendation", "team", "opponent", "odds", "Moneyline", "Run Line", "Total", "confidence_level"]
 df = df.sort_values("expected_value", ascending=False)
 
+# Display
 st.subheader("Top Kelly Bets")
-st.dataframe(df[cols], use_container_width=True)
+st.dataframe(df[columns_to_display], use_container_width=True)
