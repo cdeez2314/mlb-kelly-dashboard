@@ -3,20 +3,21 @@ import pandas as pd
 import requests
 import datetime
 import random
+from urllib.parse import quote
 
-# WEATHER API KEY (Visual Crossing)
+# CONFIG
 WEATHER_API_KEY = "6BDG77H87GAYL2KNGYFMFNRCP"
 ODDS_API_KEY = "8a9905b9beedb8254ebc41aa5e600d7a"
 
-# Page setup
+# PAGE SETUP
 st.set_page_config(page_title="MLB Kelly Betting Dashboard", layout="wide")
 st.title("⚾ MLB Betting Dashboard with Advanced Model + Kelly Criterion")
 
-# User input
+# USER INPUT
 bankroll = st.number_input("Enter your bankroll ($)", value=1000)
 min_edge = st.slider("Minimum expected value (edge)", 0.00, 0.20, 0.05, step=0.01)
 
-# Adjustment functions
+# FACTOR ADJUSTMENTS
 def get_pitcher_adjustment(team):
     return random.uniform(-0.05, 0.05)
 
@@ -47,7 +48,7 @@ def get_weather_adjustment(city):
     except:
         return 0.0
 
-# Main function to fetch and build betting model
+# MAIN MODEL
 def get_enhanced_odds(bankroll):
     url = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds"
     params = {
@@ -63,11 +64,17 @@ def get_enhanced_odds(bankroll):
 
     games = r.json()
     rows = []
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
 
     for game in games:
         home = game['home_team']
         away = game['away_team']
         city = home.split()[-1]
+        # Build Gameday URL
+        away_slug = quote(away.lower().replace(" ", "-"))
+        home_slug = quote(home.lower().replace(" ", "-"))
+        gameday_url = f"https://www.mlb.com/gameday/{away_slug}-at-{home_slug}/{today}"
+
         for bookmaker in game['bookmakers']:
             for market in bookmaker['markets']:
                 for outcome in market['outcomes']:
@@ -75,9 +82,8 @@ def get_enhanced_odds(bankroll):
                     opponent = home if team != home else away
                     odds = outcome['price']
                     is_home = team == home
-                    implied_prob = 100 / (odds + 100) if odds > 0 else abs(odds) / (abs(odds) + 100)
 
-                    # Adjusted model probability
+                    implied_prob = 100 / (odds + 100) if odds > 0 else abs(odds) / (abs(odds) + 100)
                     model_prob = implied_prob
                     model_prob += get_pitcher_adjustment(team)
                     model_prob += get_recent_form_adjustment(team)
@@ -85,7 +91,6 @@ def get_enhanced_odds(bankroll):
                     model_prob += get_weather_adjustment(city)
                     model_prob = min(max(model_prob, 0.05), 0.95)
 
-                    # Kelly calculation
                     decimal_odds = (odds / 100) + 1 if odds > 0 else (100 / abs(odds)) + 1
                     b = decimal_odds - 1
                     q = 1 - model_prob
@@ -105,32 +110,8 @@ def get_enhanced_odds(bankroll):
                         "kelly_fraction": round(kf, 4),
                         "kelly_stake": stake,
                         "confidence_level": conf,
-                        "recommendation": rec
+                        "recommendation": rec,
+                        "game_info": f"[🔗 View Game]({gameday_url})"
                     })
 
     df = pd.DataFrame(rows)
-    df = df.drop_duplicates(subset=["team", "opponent"])
-    return df
-
-# Load and display bets
-df = get_enhanced_odds(bankroll)
-
-if not df.empty:
-    df = df[df["expected_value"] >= min_edge]
-    df = df.sort_values(by="kelly_stake", ascending=False).reset_index(drop=True)
-
-    # Format for display
-    df["implied_prob"] = (df["implied_prob"] * 100).round(2).astype(str) + "%"
-    df["model_prob"] = (df["model_prob"] * 100).round(2).astype(str) + "%"
-    df["expected_value"] = (df["expected_value"] * 100).round(2).astype(str) + "%"
-    df["kelly_fraction"] = (df["kelly_fraction"] * 100).round(2).astype(str) + "%"
-    df["kelly_stake"] = df["kelly_stake"].apply(lambda x: f"${x:.2f}")
-
-    st.subheader("Top Kelly Bets Today")
-    st.dataframe(df[[
-        "recommendation", "team", "opponent", "odds",
-        "implied_prob", "model_prob", "expected_value",
-        "kelly_fraction", "kelly_stake", "confidence_level"
-    ]])
-else:
-    st.warning("No games available or API limit reached.")
