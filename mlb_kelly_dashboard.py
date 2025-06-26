@@ -9,7 +9,6 @@ st.title("⚾ MLB Betting Dashboard with Kelly Criterion")
 
 # --- Simulated input data (replace with live data fetch) ---
 df = fetch_odds_data()
-df = pd.DataFrame(data)
 
 # --- Functions ---
 def implied_prob(odds):
